@@ -490,6 +490,7 @@ export default function App() {
                 {permissionRequired && (
                   <>
                     <ol>
+                      <li>若列表里已有 QM Unlock（更新前的旧授权会失效），先选中它并点左下角 <b>−</b> 删除。</li>
                       <li>在「完全磁盘访问权限」页点击左下角 <b>+</b>。</li>
                       <li>选择「应用程序」中的 <b>QM Unlock.app</b>。</li>
                       <li>打开 QM Unlock 右侧开关，再返回本应用自动重新检测。</li>

@@ -7,6 +7,16 @@ QM Unlock 安装与故障排查
 2. 打开“应用程序”文件夹，再打开 QM Unlock。
 3. Apple 芯片（M1 / M2 / M3 / M4）请选择 arm64 DMG；Intel Mac 请选择 x64 DMG。
 
+从旧版本更新后：重新授权“完全磁盘访问权限”
+-----------------------------------------------
+每个版本的 ad-hoc 签名都不同，旧授权在更新后会失效：列表里的开关仍是打开的，
+但应用会继续提示需要权限，或读不到 QQ 音乐登录信息。更新后请：
+
+1. 打开“系统设置 → 隐私与安全性 → 完全磁盘访问权限”。
+2. 选中列表里旧的 QM Unlock，点击左下角“−”删除。
+3. 点击“+”，重新选择“应用程序”中的 QM Unlock.app，打开右侧开关。
+4. 退出并重新打开 QM Unlock。
+
 macOS 提示“无法验证开发者”
 --------------------------
 这是未使用 Developer ID 的 ad-hoc 签名开发包的正常提示，不代表应用被篡改。
@@ -31,7 +41,7 @@ M4A 转 MP3 失败
 ---------------
 QM Unlock 会先解密为原始 M4A，再用随包 FFmpeg 转为 MP3。新版 FFmpeg 已包含 M4A/MP4 容器及 AAC、ALAC、AC-3、E-AC-3 解码支持。
 
-请先在应用中关闭“转 MP3”，确认原始 M4A 能正常生成；再重新开启转码。也可以在终端检查随包 FFmpeg：
+请先在应用中把输出格式切换为“原格式”，确认原始 M4A 能正常生成；再切回“MP3”。也可以在终端检查随包 FFmpeg：
 
   "/Applications/QM Unlock.app/Contents/Resources/resources/ffmpeg/macos-universal/ffmpeg" -hide_banner -decoders | grep -E "aac|alac|ac3|eac3"
 

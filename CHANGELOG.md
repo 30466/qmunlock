@@ -4,27 +4,64 @@ All notable changes to QM Unlock are documented here.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-10
+
+### 升级须知（macOS，必读）
+
+发布包是 ad-hoc 签名，每个版本签名不同，**旧版本的「完全磁盘访问权限」授权在更新后会失效**
+（列表里的开关仍显示为打开，但已不起作用，自动获取 ekey 会失败）。更新到本版本后请：
+
+1. 打开「系统设置 → 隐私与安全性 → 完全磁盘访问权限」。
+2. 选中列表里旧的 **QM Unlock**，点击左下角 **−** 删除。
+3. 点击 **+**，重新选择「应用程序」中的 **QM Unlock.app**，打开右侧开关。
+4. 退出并重新打开 QM Unlock。
+
+### Added
+
+- MP3 output for unencrypted audio ([#11](https://github.com/mary20050520/qmunlock/issues/11)):
+  `.ogg` downloaded directly from QQ 音乐 (and unencrypted `.flac` / `.m4a`) can
+  now be converted to MP3 with the bundled FFmpeg, then receive embedded cover,
+  lyrics and tags. The MP3 is always a new file in the output directory
+  (`song.mp3`, `song (1).mp3` …); the source is never modified. `.mp3` sources
+  are enhanced without re-encoding. `.opus` / `.wav` are rejected with a clear
+  message because the bundled FFmpeg cannot decode them.
+- Content-based routing: a `.mgg` / `.mflac` without a musicex footer whose
+  content is plain audio (e.g. `OggS`) is treated as unencrypted and saved under
+  its real extension instead of failing.
+
+### Changed
+
+- One queue for everything: the 加密 / 普通 tabs are gone. Encrypted and
+  unencrypted files share one queue and one 原格式 / MP3 choice, and each file
+  takes the right path automatically — unencrypted audio is converted / enhanced
+  directly, encrypted audio is decrypted first. The ekey card only appears when
+  encrypted files are queued, and a missing ekey only blocks the run when every
+  file is encrypted.
+- When a new file was produced (converted MP3 or renamed audio), a failed QQ
+  library match is reported as a note instead of failing the whole job.
+
+### Fixed
+
+- Converted MP3s skipped about 2 seconds in ([#11](https://github.com/mary20050520/qmunlock/issues/11)):
+  the desktop map cipher wrapped at offset `0x7fff` instead of after it, corrupting
+  one byte per file. That broke the Ogg page CRC and FFmpeg dropped the page.
+- MP3 conversion lost title / artist from Ogg Vorbis sources, whose comments are
+  stream-level metadata that FFmpeg's default mapping ignores. Both global and
+  first-audio-stream tags are now carried into ID3, which also improves library
+  matching for converted files. Applies to decrypted `.mgg` → MP3 as well.
+- A failed FFmpeg run no longer leaves a half-written MP3 behind.
+
+## [2.0.0] - 2026-09-26
+
 ### Added
 
 - Design C "Darkroom" interface: dark/light themes with persisted preference and
   system default, slim overlay titlebar on macOS, pixel-art brand mark.
 - Plain-audio channel: `.flac` / `.mp3` / `.m4a` / `.ogg` / `.opus` / `.wav` can be
-  enhanced (cover / lyrics / library link) without decryption. Encrypted and
-  unencrypted files share one queue and one 原格式 / MP3 choice; each file is
-  routed by its content — unencrypted ones are converted / enhanced directly,
-  encrypted ones are decrypted first. A `.mgg` / `.mflac` without a musicex
-  footer whose content is plain audio (e.g. `OggS`) is treated as unencrypted and
-  saved with its real extension.
+  enhanced (cover / lyrics / library link) without decryption; mixed imports are
+  split into 加密 / 普通 tabs that operate independently.
 - Write mode for plain audio: in-place or copy, so original files are never
   modified silently.
-- MP3 output for unencrypted audio ([#11](https://github.com/mary20050520/qmunlock/issues/11)):
-  with MP3 selected, unencrypted `.ogg` / `.flac` / `.m4a` (e.g. `.ogg` downloaded
-  directly from QQ 音乐) are transcoded with the bundled FFmpeg, then receive the
-  usual embedded cover / lyrics / tags. The MP3 is always a new file in the output
-  directory (`song.mp3`, `song (1).mp3` …); the source is never touched, so the
-  原位 / 副本 switch only appears for 原格式 output. `.mp3` sources are enhanced as before;
-  `.opus` / `.wav` are rejected with a clear message because the bundled FFmpeg
-  cannot decode them.
 - Independent LRC output directory, revealed only while the lyrics toggle is on.
 - `+` button in the queue header to add files; `⌘O` / `⌘↩` shortcuts are now real.
 - `os_platform` command so macOS-only library features are hidden on other
@@ -67,10 +104,6 @@ All notable changes to QM Unlock are documented here.
 
 ### Fixed
 
-- MP3 transcoding dropped title / artist from Ogg Vorbis sources: their comments
-  are stream-level metadata, which FFmpeg's default global mapping ignores. Both
-  global and first-audio-stream tags are now carried into ID3, which also lets the
-  plain channel match the library by embedded tags instead of the file name.
 - DMG window opened larger than 660x400: Finder restores the last window size per
   volume name and then ignores `WindowBounds`, so the background stretched and the
   icon cards looked skewed. A fresh volume name defeats the saved state.
