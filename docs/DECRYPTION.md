@@ -86,10 +86,10 @@ TC-TEA 的实现采用 8 字节分组、16 轮解密，并检查填充、两字�
 
 ### Map-XOR
 
-对当前音频区的每个位置 `p`，实现先将位置折回 `0x7fff` 周期，再用下式选择 key 下标：
+对当前音频区的每个位置 `p`，实现先将位置折回 `0x7fff` 周期（注意：只有 `p > 0x7fff` 时才取模，`p == 0x7fff` 保持原值），再用下式选择 key 下标：
 
 ```text
-offset = p mod 0x7fff
+offset = p > 0x7fff ? p mod 0x7fff : p
 index  = (offset² + 71214) mod key_length
 shift  = ((index & 7) + 4) & 7
 ```

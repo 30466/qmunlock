@@ -67,7 +67,13 @@ pub fn detect_format(data: &[u8]) -> &'static str {
 
 fn map_decrypt(data: &mut [u8], key: &[u8], offset: u64) {
     for (i, byte) in data.iter_mut().enumerate() {
-        let off = (offset + i as u64) % 0x7fff;
+        // Only positions *beyond* 0x7fff wrap; position 0x7fff itself keeps
+        // its value.  A plain `% 0x7fff` corrupts the byte at 32767, which
+        // breaks that Ogg page's CRC and makes FFmpeg drop audio (~2s in).
+        let mut off = offset + i as u64;
+        if off > 0x7fff {
+            off %= 0x7fff;
+        }
         let index = ((off * off + 71214) % key.len() as u64) as usize;
         let shift = ((index as u32 & 7) + 4) & 7;
         // QMStreamEncrypt's historical mapL is not a normal bit rotation:
@@ -280,6 +286,22 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn map_does_not_wrap_at_exactly_0x7fff() {
+        let key: Vec<u8> = (0..256).map(|i| ((i * 37 + 11) & 0xff) as u8).collect();
+        let mask_at = |offset: u64| {
+            let mut value = [0u8; 1];
+            map_decrypt(&mut value, &key, offset);
+            value[0]
+        };
+        let index = ((0x7fffu64 * 0x7fff + 71214) % key.len() as u64) as usize;
+        let shift = ((index as u32 & 7) + 4) & 7;
+        let expected = ((u32::from(key[index]) << shift) | (u32::from(key[index]) >> shift)) as u8;
+        assert_eq!(mask_at(0x7fff), expected);
+        assert_eq!(mask_at(0x8000), mask_at(1));
+        assert_eq!(mask_at(0xfffe), mask_at(0));
+    }
+
     #[test]
     fn detects_headers() {
         assert_eq!(detect_format(b"OggS"), "ogg");
