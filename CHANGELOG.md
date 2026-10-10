@@ -9,16 +9,20 @@ All notable changes to QM Unlock are documented here.
 - Design C "Darkroom" interface: dark/light themes with persisted preference and
   system default, slim overlay titlebar on macOS, pixel-art brand mark.
 - Plain-audio channel: `.flac` / `.mp3` / `.m4a` / `.ogg` / `.opus` / `.wav` can be
-  enhanced (cover / lyrics / library link) without decryption; mixed imports are
-  split into 加密 / 普通 tabs that operate independently.
+  enhanced (cover / lyrics / library link) without decryption. Encrypted and
+  unencrypted files share one queue and one 原格式 / MP3 choice; each file is
+  routed by its content — unencrypted ones are converted / enhanced directly,
+  encrypted ones are decrypted first. A `.mgg` / `.mflac` without a musicex
+  footer whose content is plain audio (e.g. `OggS`) is treated as unencrypted and
+  saved with its real extension.
 - Write mode for plain audio: in-place or copy, so original files are never
   modified silently.
-- Plain-audio "转 MP3" output ([#11](https://github.com/mary20050520/qmunlock/issues/11)):
-  unencrypted `.ogg` / `.flac` / `.m4a` (e.g. `.ogg` downloaded directly from QQ
-  音乐) can be transcoded to MP3 with the bundled FFmpeg, then receive the usual
-  embedded cover / lyrics / tags. The MP3 is always a new file in the output
+- MP3 output for unencrypted audio ([#11](https://github.com/mary20050520/qmunlock/issues/11)):
+  with MP3 selected, unencrypted `.ogg` / `.flac` / `.m4a` (e.g. `.ogg` downloaded
+  directly from QQ 音乐) are transcoded with the bundled FFmpeg, then receive the
+  usual embedded cover / lyrics / tags. The MP3 is always a new file in the output
   directory (`song.mp3`, `song (1).mp3` …); the source is never touched, so the
-  原位 / 副本 switch is hidden in this mode. `.mp3` sources are enhanced as before;
+  原位 / 副本 switch only appears for 原格式 output. `.mp3` sources are enhanced as before;
   `.opus` / `.wav` are rejected with a clear message because the bundled FFmpeg
   cannot decode them.
 - Independent LRC output directory, revealed only while the lyrics toggle is on.

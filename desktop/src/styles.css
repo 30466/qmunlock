@@ -174,36 +174,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--mint); outl
 .shell[data-state="empty"] .queue,
 .shell[data-state="drag"] .queue { border-right: 0; }
 
-.qtabs { display: none; padding: 0 15px; border-bottom: 1px solid var(--rule); }
-.shell.has-both .qtabs { display: flex; }
-.qtab {
-  appearance: none;
-  background: 0;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  margin: 0 20px -1px 0;
-  padding: 9px 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--ink3);
-  font-size: 11px;
-  font-weight: 500;
-  transition: .15s;
-}
-.qtab:hover { color: var(--ink2); }
-.qtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--mint); }
-.qtab b {
-  font-family: "JetBrains Mono", Menlo, monospace;
-  font-size: 9.5px;
-  font-weight: 500;
-  color: var(--ink3);
-  background: var(--raised2);
-  padding: 3px 5px;
-  border-radius: 3px;
-}
-.qtab[aria-selected="true"] b { color: var(--mint-ink); background: var(--mint); }
-
 .qhead {
   flex: 0 0 32px;
   display: flex;

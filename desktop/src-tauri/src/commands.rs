@@ -65,37 +65,55 @@ pub fn get_file_info(path: String) -> FileInfo {
     classify(&PathBuf::from(&path))
 }
 
-/// 识别单个文件：区分加密格式与普通音频，普通音频无需解密即可增强。
-fn classify(path: &Path) -> FileInfo {
-    let display = path.display().to_string();
+/// 单个文件该走哪条流程。按内容而不是只看扩展名判断。
+enum Route {
+    /// 带 musicex footer 的加密文件：解密 → (转码) → 增强
+    Encrypted(core::MusicExFooter),
+    /// 未加密音频：(转码) → 增强。`format` 是按内容识别的真实格式
+    Plain { format: String },
+    /// 无法处理
+    Unsupported(String),
+}
+
+fn route(path: &Path) -> Route {
     if core::enc_path(path) {
         match decrypt::info(path) {
-            Ok(footer) => FileInfo {
-                path: display,
-                supported: true,
-                kind: "enc".into(),
-                format: Some("musicex/QMC2".into()),
-                song_mid: Some(footer.song_mid),
-                resource_filename: Some(footer.filename),
-                error: None,
-            },
-            Err(error) => FileInfo {
-                path: display,
-                supported: false,
-                kind: "enc".into(),
-                format: None,
-                song_mid: None,
-                resource_filename: None,
-                error: Some(error.to_string()),
+            Ok(footer) => Route::Encrypted(footer),
+            // 扩展名是 .mgg / .mflac，但没有 footer、内容就是普通音频：说明没加密，直接处理
+            Err(error) => match core::sniff_plain_format(path) {
+                Some(format) => Route::Plain {
+                    format: format.to_owned(),
+                },
+                None => Route::Unsupported(error.to_string()),
             },
         }
     } else if core::plain_audio_path(path) {
-        let format = path
-            .extension()
-            .and_then(|x| x.to_str())
-            .map(|x| x.to_ascii_lowercase())
-            .unwrap_or_default();
-        FileInfo {
+        Route::Plain {
+            format: path
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.to_ascii_lowercase())
+                .unwrap_or_default(),
+        }
+    } else {
+        Route::Unsupported("不支持的文件类型".into())
+    }
+}
+
+/// 识别单个文件：区分加密格式与未加密音频，未加密的无需解密即可转换 / 增强。
+fn classify(path: &Path) -> FileInfo {
+    let display = path.display().to_string();
+    match route(path) {
+        Route::Encrypted(footer) => FileInfo {
+            path: display,
+            supported: true,
+            kind: "enc".into(),
+            format: Some("musicex/QMC2".into()),
+            song_mid: Some(footer.song_mid),
+            resource_filename: Some(footer.filename),
+            error: None,
+        },
+        Route::Plain { format } => FileInfo {
             path: display,
             supported: true,
             kind: "plain".into(),
@@ -103,17 +121,25 @@ fn classify(path: &Path) -> FileInfo {
             song_mid: None,
             resource_filename: None,
             error: None,
-        }
-    } else {
-        FileInfo {
+        },
+        Route::Unsupported(error) if core::enc_path(path) => FileInfo {
+            path: display,
+            supported: false,
+            kind: "enc".into(),
+            format: None,
+            song_mid: None,
+            resource_filename: None,
+            error: Some(error),
+        },
+        Route::Unsupported(error) => FileInfo {
             path: display,
             supported: false,
             kind: "unknown".into(),
             format: None,
             song_mid: None,
             resource_filename: None,
-            error: Some("不支持的文件类型".into()),
-        }
+            error: Some(error),
+        },
     }
 }
 
@@ -201,9 +227,26 @@ async fn decrypt_one(
     file_total: u64,
 ) -> DecryptResult {
     let input_name = input.display().to_string();
-    if core::plain_audio_path(input) {
-        return enhance_plain(app, input, output_dir, options, file_index, file_total).await;
-    }
+    let footer = match route(input) {
+        Route::Encrypted(footer) => footer,
+        Route::Plain { format } => {
+            return enhance_plain(
+                app, input, &format, output_dir, options, file_index, file_total,
+            )
+            .await;
+        }
+        Route::Unsupported(error) => {
+            return DecryptResult {
+                input: input_name,
+                output: None,
+                ok: false,
+                format: None,
+                error: Some(error),
+                cover: None,
+                lyrics: None,
+            };
+        }
+    };
     emit_frac(
         app,
         "parse",
@@ -214,7 +257,6 @@ async fn decrypt_one(
         "正在读取 musicex footer",
     );
     let run = async {
-        let footer = decrypt::info(input)?;
         emit_frac(
             app,
             "ekey",
@@ -267,9 +309,7 @@ async fn decrypt_one(
     .await;
     match run {
         Ok((output, format)) => {
-            let song_mid = decrypt::info(input)
-                .map(|footer| footer.song_mid)
-                .unwrap_or_default();
+            let song_mid = footer.song_mid.clone();
             let cover = if options.embed_cover {
                 let notes = decorate_output(
                     app,
@@ -375,11 +415,13 @@ fn plain_transcodable(format: &str) -> bool {
     matches!(format, "ogg" | "flac" | "m4a")
 }
 
-/// 决定普通音频写到哪里。
+/// 决定未加密音频写到哪里（`format` 为按内容识别的真实格式）。
 ///
-/// 选了「转 MP3」且源不是 MP3 时转码到输出目录（未选则源目录），用 `available_path`
-/// 追加「 (1)」等序号，绝不覆盖源文件或同名已有文件；源已是 MP3 时转码没有意义，
-/// 退回原位 / 副本逻辑，行为与未选「转 MP3」一致。
+/// - 输出 MP3 且源不是 MP3：转码到输出目录（未选则源目录），用 `available_path`
+///   追加「 (1)」等序号，绝不覆盖源文件或同名已有文件。
+/// - 扩展名与真实格式不符（如未加密的 .mgg 其实是 OGG）：另存为正确扩展名的新文件，
+///   播放器才认得；原文件不动。
+/// - 其余情况（含源已是 MP3）沿用原位 / 副本逻辑。
 fn plain_target(
     input: &Path,
     format: &str,
@@ -392,21 +434,35 @@ fn plain_target(
             .or_else(|| input.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| PathBuf::from("."))
     };
-    if options.plain_mp3 && format != "mp3" {
+    let stem = || {
+        input
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("converted")
+            .to_owned()
+    };
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(options.output_mode, core::OutputMode::Mp3) && format != "mp3" {
         if !plain_transcodable(format) {
             return Err(Error::from(format!(
-                "暂不支持 {} 转 MP3，请改选「保留原格式」",
+                "暂不支持 {} 转 MP3，请改选「原格式」",
                 format.to_uppercase()
             )));
         }
-        let stem = input
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("converted");
         Ok(PlainTarget::Transcode(decrypt::available_path(
             &dir(),
-            stem,
+            &stem(),
             "mp3",
+        )))
+    } else if extension != format {
+        Ok(PlainTarget::Copy(decrypt::available_path(
+            &dir(),
+            &stem(),
+            format,
         )))
     } else if options.plain_copy {
         Ok(PlainTarget::Copy(unique_copy_target(input, &dir())))
@@ -415,7 +471,7 @@ fn plain_target(
     }
 }
 
-/// 普通音频通道：不解密，可选转 MP3，再做封面 / 歌词增强。
+/// 未加密音频流程：不解密，可选转 MP3，再做封面 / 歌词增强。
 ///
 /// 曲库信息按文件名（去掉扩展名）检索；写入目标见 [`plain_target`]：转 MP3 时
 /// 增强作用于新生成的 MP3（从而可以内嵌封面），`plain_copy` 为真时先复制副本再改副本，
@@ -423,17 +479,13 @@ fn plain_target(
 async fn enhance_plain(
     app: &tauri::AppHandle,
     input: &Path,
+    source_format: &str,
     output_dir: Option<&Path>,
     options: &DecryptOptions,
     file_index: u64,
     file_total: u64,
 ) -> DecryptResult {
     let input_name = input.display().to_string();
-    let source_format = input
-        .extension()
-        .and_then(|x| x.to_str())
-        .map(|x| x.to_ascii_lowercase())
-        .unwrap_or_default();
     emit_frac(
         app,
         "parse",
@@ -441,17 +493,20 @@ async fn enhance_plain(
         file_index,
         file_total,
         FRAC_PARSE,
-        "正在识别普通音频",
+        "正在识别未加密音频",
     );
     let run = async {
-        let mut format = source_format.clone();
-        let target = match plain_target(input, &source_format, output_dir, options)? {
+        let mut format = source_format.to_owned();
+        // 是否产出了「格式上的新文件」（转码，或未加密 .mgg 另存为 .ogg）
+        let mut converted = false;
+        let target = match plain_target(input, source_format, output_dir, options)? {
             PlainTarget::InPlace => input.to_path_buf(),
             PlainTarget::Copy(dest) => {
                 if let Some(dir) = dest.parent() {
                     std::fs::create_dir_all(dir)?;
                 }
                 std::fs::copy(input, &dest)?;
+                converted = dest.extension() != input.extension();
                 dest
             }
             PlainTarget::Transcode(dest) => {
@@ -474,6 +529,7 @@ async fn enhance_plain(
                 .await
                 .map_err(|error| Error::from(format!("转码任务异常：{error}")))??;
                 format = "mp3".to_owned();
+                converted = true;
                 dest
             }
         };
@@ -512,8 +568,8 @@ async fn enhance_plain(
         };
         let meta = match matched {
             Ok(meta) => meta,
-            // 转码产物本身就是用户要的结果：曲库匹配失败只记为备注，不把整个任务判为失败
-            Err(error) if format != source_format => {
+            // 转换产物本身就是用户要的结果：曲库匹配失败只记为备注，不把整个任务判为失败
+            Err(error) if converted => {
                 return Ok((target, format, vec![format!("未匹配曲库：{error}")], None));
             }
             Err(error) => return Err(error),
@@ -909,17 +965,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn plain_options(plain_copy: bool, plain_mp3: bool) -> DecryptOptions {
+    fn plain_options(plain_copy: bool, mp3: bool) -> DecryptOptions {
         DecryptOptions {
-            output_mode: core::OutputMode::Original,
+            output_mode: if mp3 {
+                core::OutputMode::Mp3
+            } else {
+                core::OutputMode::Original
+            },
             manual_ekey: None,
             embed_cover: false,
             fetch_lyrics: false,
             lyrics_dir: None,
             embed_synced_lyrics: false,
             plain_copy,
-            plain_mp3,
         }
+    }
+
+    #[test]
+    fn unencrypted_mgg_is_routed_as_plain_ogg() {
+        let dir = std::env::temp_dir().join(format!("qmunlock-route-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 扩展名 .mgg，但没有 musicex footer、内容是 OggS：按未加密 OGG 处理
+        let fake = dir.join("song.mgg");
+        std::fs::write(&fake, b"OggS\0\x02 plain vorbis page padding padding").unwrap();
+        assert!(matches!(route(&fake), Route::Plain { ref format } if format == "ogg"));
+        assert_eq!(classify(&fake).kind, "plain");
+        // 原格式输出：另存为正确扩展名的 .ogg，不动原文件
+        assert_eq!(
+            plain_target(&fake, "ogg", None, &plain_options(false, false)).unwrap(),
+            PlainTarget::Copy(dir.join("song.ogg"))
+        );
+        // 转 MP3：直接转码
+        assert_eq!(
+            plain_target(&fake, "ogg", None, &plain_options(false, true)).unwrap(),
+            PlainTarget::Transcode(dir.join("song.mp3"))
+        );
+
+        // 既无 footer 也认不出格式：仍报不可用
+        let junk = dir.join("junk.mgg");
+        std::fs::write(&junk, vec![0x5Au8; 64]).unwrap();
+        assert!(matches!(route(&junk), Route::Unsupported(_)));
+        assert!(!classify(&junk).supported);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

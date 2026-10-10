@@ -82,9 +82,6 @@ pub struct DecryptOptions {
     /// 普通音频是否先复制副本再增强（false 表示原位写入）
     #[serde(default)]
     pub plain_copy: bool,
-    /// 普通音频是否转为 MP3（源已是 MP3 时忽略）。转码总是另存新文件，不改原文件。
-    #[serde(default)]
-    pub plain_mp3: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -151,6 +148,22 @@ pub fn plain_audio_path(path: &Path) -> bool {
         extension(path).as_deref(),
         Some("flac") | Some("mp3") | Some("m4a") | Some("ogg") | Some("opus") | Some("wav")
     )
+}
+
+/// 按文件头识别未加密音频的真实格式（ogg / flac / m4a / mp3），识别不出返回 None。
+///
+/// 用于「扩展名是 .mgg / .mflac，但内容其实没加密」的文件：它们没有 musicex footer，
+/// 不能走解密，但可以直接当普通音频处理。调用方必须先确认 footer 不存在——加密数据的
+/// 首字节有 1/256 概率恰好是 0xFF，单看文件头会误判成 MP3。
+pub fn sniff_plain_format(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let mut file = std::fs::File::open(path).ok()?;
+    let size = file.read(&mut head).ok()?;
+    match qmc2::detect_format(&head[..size]) {
+        "bin" => None,
+        format => Some(format),
+    }
 }
 
 /// 本工具能处理的文件：加密格式或普通音频。

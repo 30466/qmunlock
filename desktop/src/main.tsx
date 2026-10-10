@@ -48,11 +48,10 @@ type DecryptResult = {
   lyrics?: string;
 };
 
-type JobRow = { tab: Ctx; result: DecryptResult };
+type JobRow = { result: DecryptResult };
 
 type OutputMode = "original" | "mp3";
 type KeyMode = "automatic" | "manual";
-type Ctx = "enc" | "plain";
 type Theme = "dark" | "light";
 
 type ProgressEvent = {
@@ -105,7 +104,6 @@ function initialTheme(): Theme {
 export default function App() {
   const [paths, setPaths] = useState<string[]>([]);
   const [fileInfo, setFileInfo] = useState<Record<string, FileInfo>>({});
-  const [tab, setTab] = useState<Ctx>("enc");
   const [outputDir, setOutputDir] = useState("");
   const [lyricsDir, setLyricsDir] = useState("");
   const [mode, setMode] = useState<OutputMode>("original");
@@ -123,7 +121,6 @@ export default function App() {
   const [fetchLyrics, setFetchLyrics] = useState(false);
   const [embedSyncedLyrics, setEmbedSyncedLyrics] = useState(false);
   const [plainCopy, setPlainCopy] = useState(false);
-  const [plainMp3, setPlainMp3] = useState(false);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [noticeBad, setNoticeBad] = useState(false);
   const permissionSettingsOpened = useRef(false);
@@ -317,14 +314,23 @@ export default function App() {
     () => paths.filter((path) => fileInfo[path]?.kind === "plain"),
     [paths, fileInfo],
   );
-  const hasBoth = encPaths.length > 0 && plainPaths.length > 0;
-  const ctx: Ctx = hasBoth ? tab : encPaths.length > 0 ? "enc" : "plain";
-  const visiblePaths = ctx === "enc" ? encPaths : plainPaths;
+  // 不再让用户区分加密 / 普通：同一个队列，后端按文件内容自动选择流程——
+  // 未加密的直接（转换 +）增强，加密的先解密
+  const visiblePaths = useMemo(
+    () => paths.filter((path) => fileInfo[path]?.kind === "enc" || fileInfo[path]?.kind === "plain"),
+    [paths, fileInfo],
+  );
+  const hasEnc = encPaths.length > 0;
+  const hasPlain = plainPaths.length > 0;
+  // 未加密文件是否会另存新文件：转 MP3，或扩展名与真实格式不符（如未加密的 .mgg）
+  const plainWritesNew = mode === "mp3" || plainPaths.some((path) => !path.toLowerCase().endsWith(`.${fileInfo[path]?.format}`));
   const isMac = os === "macos";
 
   const start = async () => {
     if (!visiblePaths.length || running) return;
-    if (ctx === "enc") {
+    // 只有全是加密文件时才因缺 ekey 拦下；混合队列照常开始，未加密的不受影响，
+    // 加密的会在各自行里报出缺 ekey 的原因
+    if (hasEnc && !hasPlain) {
       if (keyMode === "manual" && !manualKey.trim()) {
         setNotice("请粘贴 ekey，或切换为自动获取");
         setNoticeBad(true);
@@ -339,7 +345,7 @@ export default function App() {
     setNotice(undefined);
     setNoticeBad(false);
     setRunning(true);
-    setJobs((old) => old.filter((row) => row.tab !== ctx));
+    setJobs([]);
     setProgress(undefined);
     try {
       const result = await invoke<DecryptResult[]>("decrypt_paths", {
@@ -347,16 +353,15 @@ export default function App() {
         outputDir: outputDir || null,
         options: {
           output_mode: mode,
-          manual_ekey: ctx === "enc" && keyMode === "manual" ? manualKey.trim() : null,
+          manual_ekey: hasEnc && keyMode === "manual" ? manualKey.trim() : null,
           embed_cover: embedCover,
           fetch_lyrics: fetchLyrics,
           lyrics_dir: fetchLyrics && lyricsDir ? lyricsDir : null,
           embed_synced_lyrics: fetchLyrics && embedSyncedLyrics,
-          plain_copy: ctx === "plain" ? plainCopy : false,
-          plain_mp3: ctx === "plain" ? plainMp3 : false,
+          plain_copy: plainCopy,
         },
       });
-      setJobs((old) => [...old, ...result.map((r) => ({ tab: ctx, result: r }))]);
+      setJobs(result.map((r) => ({ result: r })));
       const ok = result.filter((r) => r.ok).length;
       const fail = result.length - ok;
       setNotice(fail > 0 ? `${ok}/${result.length} 完成 · ${fail} 失败` : `${ok}/${result.length} 完成`);
@@ -364,7 +369,7 @@ export default function App() {
     } catch (error) {
       setJobs((old) => [
         ...old,
-        { tab: ctx, result: { input: "任务", ok: false, error: String(error) } },
+        { result: { input: "任务", ok: false, error: String(error) } },
       ]);
       setNotice(`任务失败：${String(error)}`);
       setNoticeBad(true);
@@ -391,20 +396,19 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const keyReady = ctx === "plain" ? true : keyMode === "manual" ? manualKey.trim().length > 0 : Boolean(credentials?.available);
+  const keyReady = hasPlain || (keyMode === "manual" ? manualKey.trim().length > 0 : Boolean(credentials?.available));
   const canStart = visiblePaths.length > 0 && keyReady && !running;
   const state = dragActive ? "drag" : paths.length ? "loaded" : "empty";
   const permissionRequired = credentials?.state === "permission_required";
-  const tabJobs = jobs.filter((row) => row.tab === ctx);
-  const failedJob = tabJobs.find((row) => !row.result.ok)?.result;
+  const failedJob = jobs.find((row) => !row.result.ok && fileInfo[row.result.input]?.kind !== "plain")?.result;
   const jobByPath = useMemo(() => {
     const map = new Map<string, DecryptResult>();
-    for (const row of tabJobs) map.set(row.result.input, row.result);
+    for (const row of jobs) map.set(row.result.input, row.result);
     return map;
-  }, [tabJobs]);
+  }, [jobs]);
 
   return (
-    <main className={`shell${isMac ? " is-mac" : ""}${hasBoth ? " has-both" : ""}`} data-state={state}>
+    <main className={`shell${isMac ? " is-mac" : ""}`} data-state={state}>
       <header className="topbar" data-tauri-drag-region>
         <div className="wm">
           <img src={appIcon} alt="" />
@@ -453,15 +457,6 @@ export default function App() {
           }}
           onDrop={handleDrop}
         >
-          <div className="qtabs" role="tablist" aria-label="队列类型">
-            <button className="qtab" role="tab" aria-selected={ctx === "enc"} onClick={() => setTab("enc")}>
-              加密<b>{encPaths.length}</b>
-            </button>
-            <button className="qtab" role="tab" aria-selected={ctx === "plain"} onClick={() => setTab("plain")}>
-              普通<b>{plainPaths.length}</b>
-            </button>
-          </div>
-
           {paths.length === 0 ? (
             <div className="drop">
               <div className="halo">
@@ -560,7 +555,8 @@ export default function App() {
         </section>
 
         <aside className="side">
-          {ctx === "enc" && (
+          {/* 只在有加密文件（或队列为空、还不知道）时需要 ekey */}
+          {(hasEnc || !hasPlain) && (
             <div className="card">
               <p className="ch">key</p>
               <div className="seg" role="tablist" aria-label="ekey 来源">
@@ -594,28 +590,16 @@ export default function App() {
             </div>
           )}
 
-          {ctx === "enc" && (
-            <div className="card">
-              <p className="ch">format</p>
-              <div className="seg" role="tablist" aria-label="输出格式">
-                <button aria-pressed={mode === "original"} onClick={() => setMode("original")}>原格式</button>
-                <button aria-pressed={mode === "mp3"} onClick={() => setMode("mp3")}>MP3</button>
-              </div>
+          <div className="card">
+            <p className="ch">format</p>
+            <div className="seg" role="tablist" aria-label="输出格式">
+              <button aria-pressed={mode === "original"} onClick={() => setMode("original")}>原格式</button>
+              <button aria-pressed={mode === "mp3"} onClick={() => setMode("mp3")}>MP3</button>
             </div>
-          )}
+          </div>
 
-          {ctx === "plain" && (
-            <div className="card">
-              <p className="ch">format</p>
-              <div className="seg" role="tablist" aria-label="输出格式">
-                <button aria-pressed={!plainMp3} onClick={() => setPlainMp3(false)}>保留原格式</button>
-                <button aria-pressed={plainMp3} onClick={() => setPlainMp3(true)}>转 MP3</button>
-              </div>
-            </div>
-          )}
-
-          {/* 转 MP3 总是另存新文件，「原位 / 副本」只对保留原格式有意义 */}
-          {ctx === "plain" && !plainMp3 && (
+          {/* 原位 / 副本只影响原格式输出的未加密文件；转 MP3 与解密总是生成新文件 */}
+          {hasPlain && mode === "original" && (
             <div className="card">
               <p className="ch">write</p>
               <div className="seg" role="tablist" aria-label="写入方式">
@@ -645,7 +629,7 @@ export default function App() {
 
           <div className="card">
             <p className="ch">output</p>
-            {(ctx === "enc" || plainCopy || plainMp3) && (
+            {(hasEnc || !hasPlain || plainCopy || plainWritesNew) && (
               <button className="path" style={{ marginTop: 0 }} onClick={() => void chooseOutput()} title={outputDir || "与源文件相同"}>
                 <span className="chip">out</span>
                 <span className="pv">{outputDir || "同源目录"}</span>
@@ -667,11 +651,11 @@ export default function App() {
       <footer className="foot">
         <div className="count">
           {running ? `${progress?.percent ?? 0}%` : visiblePaths.length}
-          <small>{running ? "处理中" : ctx === "enc" ? "待解密" : "待写入"}</small>
+          <small>{running ? "处理中" : "待处理"}</small>
         </div>
         <button className="go" disabled={!canStart} onClick={() => void start()}>
           {running ? <LoaderCircle size={14} className="spin" /> : null}
-          <span>{running ? "处理中" : ctx === "enc" ? "解密" : "写入"}</span>
+          <span>{running ? "处理中" : hasEnc ? "解密" : mode === "mp3" ? "转换" : "写入"}</span>
           <kbd>↩</kbd>
         </button>
       </footer>
