@@ -123,6 +123,7 @@ export default function App() {
   const [fetchLyrics, setFetchLyrics] = useState(false);
   const [embedSyncedLyrics, setEmbedSyncedLyrics] = useState(false);
   const [plainCopy, setPlainCopy] = useState(false);
+  const [plainMp3, setPlainMp3] = useState(false);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [noticeBad, setNoticeBad] = useState(false);
   const permissionSettingsOpened = useRef(false);
@@ -352,6 +353,7 @@ export default function App() {
           lyrics_dir: fetchLyrics && lyricsDir ? lyricsDir : null,
           embed_synced_lyrics: fetchLyrics && embedSyncedLyrics,
           plain_copy: ctx === "plain" ? plainCopy : false,
+          plain_mp3: ctx === "plain" ? plainMp3 : false,
         },
       });
       setJobs((old) => [...old, ...result.map((r) => ({ tab: ctx, result: r }))]);
@@ -604,6 +606,17 @@ export default function App() {
 
           {ctx === "plain" && (
             <div className="card">
+              <p className="ch">format</p>
+              <div className="seg" role="tablist" aria-label="输出格式">
+                <button aria-pressed={!plainMp3} onClick={() => setPlainMp3(false)}>保留原格式</button>
+                <button aria-pressed={plainMp3} onClick={() => setPlainMp3(true)}>转 MP3</button>
+              </div>
+            </div>
+          )}
+
+          {/* 转 MP3 总是另存新文件，「原位 / 副本」只对保留原格式有意义 */}
+          {ctx === "plain" && !plainMp3 && (
+            <div className="card">
               <p className="ch">write</p>
               <div className="seg" role="tablist" aria-label="写入方式">
                 <button aria-pressed={!plainCopy} onClick={() => setPlainCopy(false)}>原位</button>
@@ -632,7 +645,7 @@ export default function App() {
 
           <div className="card">
             <p className="ch">output</p>
-            {(ctx === "enc" || plainCopy) && (
+            {(ctx === "enc" || plainCopy || plainMp3) && (
               <button className="path" style={{ marginTop: 0 }} onClick={() => void chooseOutput()} title={outputDir || "与源文件相同"}>
                 <span className="chip">out</span>
                 <span className="pv">{outputDir || "同源目录"}</span>

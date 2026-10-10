@@ -13,6 +13,14 @@ All notable changes to QM Unlock are documented here.
   split into 加密 / 普通 tabs that operate independently.
 - Write mode for plain audio: in-place or copy, so original files are never
   modified silently.
+- Plain-audio "转 MP3" output ([#11](https://github.com/mary20050520/qmunlock/issues/11)):
+  unencrypted `.ogg` / `.flac` / `.m4a` (e.g. `.ogg` downloaded directly from QQ
+  音乐) can be transcoded to MP3 with the bundled FFmpeg, then receive the usual
+  embedded cover / lyrics / tags. The MP3 is always a new file in the output
+  directory (`song.mp3`, `song (1).mp3` …); the source is never touched, so the
+  原位 / 副本 switch is hidden in this mode. `.mp3` sources are enhanced as before;
+  `.opus` / `.wav` are rejected with a clear message because the bundled FFmpeg
+  cannot decode them.
 - Independent LRC output directory, revealed only while the lyrics toggle is on.
 - `+` button in the queue header to add files; `⌘O` / `⌘↩` shortcuts are now real.
 - `os_platform` command so macOS-only library features are hidden on other
@@ -55,6 +63,10 @@ All notable changes to QM Unlock are documented here.
 
 ### Fixed
 
+- MP3 transcoding dropped title / artist from Ogg Vorbis sources: their comments
+  are stream-level metadata, which FFmpeg's default global mapping ignores. Both
+  global and first-audio-stream tags are now carried into ID3, which also lets the
+  plain channel match the library by embedded tags instead of the file name.
 - DMG window opened larger than 660x400: Finder restores the last window size per
   volume name and then ignores `WindowBounds`, so the background stretched and the
   icon cards looked skewed. A fresh volume name defeats the saved state.

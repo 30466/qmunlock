@@ -82,6 +82,9 @@ pub struct DecryptOptions {
     /// 普通音频是否先复制副本再增强（false 表示原位写入）
     #[serde(default)]
     pub plain_copy: bool,
+    /// 普通音频是否转为 MP3（源已是 MP3 时忽略）。转码总是另存新文件，不改原文件。
+    #[serde(default)]
+    pub plain_mp3: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

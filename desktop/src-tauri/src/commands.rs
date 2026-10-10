@@ -357,9 +357,68 @@ fn unique_copy_target(input: &Path, dir: &Path) -> PathBuf {
     dest
 }
 
-/// 普通音频通道：不解密，只做封面 / 歌词增强。
+/// 普通音频的写入目标。
+#[derive(Debug, PartialEq, Eq)]
+enum PlainTarget {
+    /// 原位增强源文件
+    InPlace,
+    /// 先复制到此路径再增强副本
+    Copy(PathBuf),
+    /// 先用 FFmpeg 转码到此路径（MP3）再增强
+    Transcode(PathBuf),
+}
+
+/// 打包的精简 FFmpeg 能解码后转 MP3 的普通音频格式（见 scripts/build-ffmpeg.sh：
+/// 仅含 ogg / flac / mp3 / mov 解复用器与 vorbis / flac / aac / alac 等解码器）。
+/// OPUS、WAV 不在其中，提前给出明确提示，而不是抛出 FFmpeg 的原始报错。
+fn plain_transcodable(format: &str) -> bool {
+    matches!(format, "ogg" | "flac" | "m4a")
+}
+
+/// 决定普通音频写到哪里。
 ///
-/// 曲库信息按文件名（去掉扩展名）检索；`plain_copy` 为真时先复制副本再改副本，
+/// 选了「转 MP3」且源不是 MP3 时转码到输出目录（未选则源目录），用 `available_path`
+/// 追加「 (1)」等序号，绝不覆盖源文件或同名已有文件；源已是 MP3 时转码没有意义，
+/// 退回原位 / 副本逻辑，行为与未选「转 MP3」一致。
+fn plain_target(
+    input: &Path,
+    format: &str,
+    output_dir: Option<&Path>,
+    options: &DecryptOptions,
+) -> core::Result<PlainTarget> {
+    let dir = || {
+        output_dir
+            .map(Path::to_path_buf)
+            .or_else(|| input.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+    if options.plain_mp3 && format != "mp3" {
+        if !plain_transcodable(format) {
+            return Err(Error::from(format!(
+                "暂不支持 {} 转 MP3，请改选「保留原格式」",
+                format.to_uppercase()
+            )));
+        }
+        let stem = input
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("converted");
+        Ok(PlainTarget::Transcode(decrypt::available_path(
+            &dir(),
+            stem,
+            "mp3",
+        )))
+    } else if options.plain_copy {
+        Ok(PlainTarget::Copy(unique_copy_target(input, &dir())))
+    } else {
+        Ok(PlainTarget::InPlace)
+    }
+}
+
+/// 普通音频通道：不解密，可选转 MP3，再做封面 / 歌词增强。
+///
+/// 曲库信息按文件名（去掉扩展名）检索；写入目标见 [`plain_target`]：转 MP3 时
+/// 增强作用于新生成的 MP3（从而可以内嵌封面），`plain_copy` 为真时先复制副本再改副本，
 /// 否则原位写入。macOS 独有的访达图标与 QQ 音乐属性仍由 cfg 门控，其他平台自动跳过。
 async fn enhance_plain(
     app: &tauri::AppHandle,
@@ -370,7 +429,7 @@ async fn enhance_plain(
     file_total: u64,
 ) -> DecryptResult {
     let input_name = input.display().to_string();
-    let format = input
+    let source_format = input
         .extension()
         .and_then(|x| x.to_str())
         .map(|x| x.to_ascii_lowercase())
@@ -385,17 +444,38 @@ async fn enhance_plain(
         "正在识别普通音频",
     );
     let run = async {
-        let target = if options.plain_copy {
-            let dir = output_dir
-                .map(Path::to_path_buf)
-                .or_else(|| input.parent().map(Path::to_path_buf))
-                .unwrap_or_else(|| PathBuf::from("."));
-            std::fs::create_dir_all(&dir)?;
-            let dest = unique_copy_target(input, &dir);
-            std::fs::copy(input, &dest)?;
-            dest
-        } else {
-            input.to_path_buf()
+        let mut format = source_format.clone();
+        let target = match plain_target(input, &source_format, output_dir, options)? {
+            PlainTarget::InPlace => input.to_path_buf(),
+            PlainTarget::Copy(dest) => {
+                if let Some(dir) = dest.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                std::fs::copy(input, &dest)?;
+                dest
+            }
+            PlainTarget::Transcode(dest) => {
+                if let Some(dir) = dest.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                emit_frac(
+                    app,
+                    "transcode",
+                    &input_name,
+                    file_index,
+                    file_total,
+                    FRAC_PLAIN_TRANSCODE,
+                    "正在转换为 MP3",
+                );
+                let (source, output) = (input.to_path_buf(), dest.clone());
+                tauri::async_runtime::spawn_blocking(move || {
+                    decrypt::convert_to_mp3(&source, &output)
+                })
+                .await
+                .map_err(|error| Error::from(format!("转码任务异常：{error}")))??;
+                format = "mp3".to_owned();
+                dest
+            }
         };
 
         let stem = input
@@ -403,8 +483,9 @@ async fn enhance_plain(
             .and_then(|s| s.to_str())
             .unwrap_or_default()
             .to_owned();
-        // 文件自带标签比文件名可靠：优先用它构造检索词，并校验检索结果是否同一首歌
-        let embedded = tags::read_embedded_tags(input);
+        // 文件自带标签比文件名可靠：优先用它构造检索词，并校验检索结果是否同一首歌。
+        // 读目标而非源：OGG 等格式读不到标签，转码后 FFmpeg 会把注释带进 MP3 的 ID3
+        let embedded = tags::read_embedded_tags(&target);
         let query = match embedded.as_ref() {
             Some(found) if !found.title.is_empty() => {
                 if found.artist.is_empty() {
@@ -425,8 +506,18 @@ async fn enhance_plain(
             "正在检索曲库",
         );
         // 检索返回全部候选，再结合文件标签逐条校验挑出同一首歌，避免错配版本
-        let candidates = tags::search_songs(&query).await?;
-        let meta = tags::pick_matching_meta(&query, candidates, embedded.as_ref())?;
+        let matched = match tags::search_songs(&query).await {
+            Ok(candidates) => tags::pick_matching_meta(&query, candidates, embedded.as_ref()),
+            Err(error) => Err(error),
+        };
+        let meta = match matched {
+            Ok(meta) => meta,
+            // 转码产物本身就是用户要的结果：曲库匹配失败只记为备注，不把整个任务判为失败
+            Err(error) if format != source_format => {
+                return Ok((target, format, vec![format!("未匹配曲库：{error}")], None));
+            }
+            Err(error) => return Err(error),
+        };
 
         let mut notes: Vec<String> = Vec::new();
         // 「封面」= FLAC / MP3 内嵌封面 + 访达自定义图标（macOS）。
@@ -493,12 +584,12 @@ async fn enhance_plain(
             None
         };
 
-        Ok::<_, Error>((target, notes, lyrics))
+        Ok::<_, Error>((target, format, notes, lyrics))
     }
     .await;
 
     match run {
-        Ok((target, notes, lyrics)) => DecryptResult {
+        Ok((target, format, notes, lyrics)) => DecryptResult {
             input: input_name,
             output: Some(target.display().to_string()),
             ok: true,
@@ -756,6 +847,8 @@ const FRAC_EKEY: f64 = 0.15;
 const FRAC_DECRYPT_BASE: f64 = 0.20;
 const FRAC_DECRYPT_SPAN: f64 = 0.60;
 const FRAC_TRANSCODE: f64 = 0.82;
+/// 普通音频没有解密阶段，转码是主要耗时，紧接识别之后显示
+const FRAC_PLAIN_TRANSCODE: f64 = 0.20;
 const FRAC_COVER: f64 = 0.88;
 const FRAC_LYRICS: f64 = 0.93;
 
@@ -814,5 +907,85 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         assert_eq!(unique_copy_target(&source, &other), other.join("song.flac"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn plain_options(plain_copy: bool, plain_mp3: bool) -> DecryptOptions {
+        DecryptOptions {
+            output_mode: core::OutputMode::Original,
+            manual_ekey: None,
+            embed_cover: false,
+            fetch_lyrics: false,
+            lyrics_dir: None,
+            embed_synced_lyrics: false,
+            plain_copy,
+            plain_mp3,
+        }
+    }
+
+    #[test]
+    fn plain_target_transcodes_non_mp3_without_overwriting() {
+        let dir = std::env::temp_dir().join(format!("qmunlock-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("song.ogg");
+        std::fs::write(&source, b"x").unwrap();
+        let mp3 = plain_options(false, true);
+
+        // 未选输出目录：转到源目录，扩展名换成 mp3
+        assert_eq!(
+            plain_target(&source, "ogg", None, &mp3).unwrap(),
+            PlainTarget::Transcode(dir.join("song.mp3"))
+        );
+        // 同名 mp3 已存在时追加序号，不覆盖
+        std::fs::write(dir.join("song.mp3"), b"x").unwrap();
+        assert_eq!(
+            plain_target(&source, "ogg", None, &mp3).unwrap(),
+            PlainTarget::Transcode(dir.join("song (1).mp3"))
+        );
+        // 选了输出目录：转到该目录；「原位」开关对转码无效
+        let out = dir.join("out");
+        assert_eq!(
+            plain_target(&source, "ogg", Some(&out), &mp3).unwrap(),
+            PlainTarget::Transcode(out.join("song.mp3"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plain_target_rejects_formats_bundled_ffmpeg_cannot_decode() {
+        let mp3 = plain_options(false, true);
+        for format in ["opus", "wav"] {
+            let source = PathBuf::from(format!("/music/song.{format}"));
+            assert!(plain_target(&source, format, None, &mp3).is_err());
+            // 保留原格式时不受影响
+            assert_eq!(
+                plain_target(&source, format, None, &plain_options(false, false)).unwrap(),
+                PlainTarget::InPlace
+            );
+        }
+    }
+
+    #[test]
+    fn plain_target_keeps_mp3_and_original_modes() {
+        let source = Path::new("/music/song.mp3");
+        // 源已是 MP3：转 MP3 选项不生效，沿用原位 / 副本
+        assert_eq!(
+            plain_target(source, "mp3", None, &plain_options(false, true)).unwrap(),
+            PlainTarget::InPlace
+        );
+        assert!(matches!(
+            plain_target(source, "mp3", None, &plain_options(true, true)).unwrap(),
+            PlainTarget::Copy(_)
+        ));
+        // 保留原格式：与之前一致
+        assert_eq!(
+            plain_target(
+                Path::new("/music/song.ogg"),
+                "ogg",
+                None,
+                &plain_options(false, false)
+            )
+            .unwrap(),
+            PlainTarget::InPlace
+        );
     }
 }
