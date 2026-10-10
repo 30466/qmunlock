@@ -30,7 +30,12 @@ GPL FFmpeg。
 
 ## 行为
 
-- 支持新版 `musicex` `.mgg` / `.mflac`。
+- 支持新版 `musicex` `.mgg` / `.mflac` / `.mmp4`，以及未加密的 `.flac` / `.mp3` / `.m4a` /
+  `.ogg` / `.opus` / `.wav`。两类文件共用一个队列，按内容选择流程（`commands.rs` 的
+  `route()`）：有 musicex footer 的先解密；没有 footer 的按文件头识别真实格式，直接转换 /
+  增强。扩展名是 `.mgg` / `.mflac` 但内容是普通音频的文件按未加密处理，并以真实扩展名另存。
+- 选择 MP3 时，未加密的 `.ogg` / `.flac` / `.m4a` 用随包 FFmpeg 转码为新文件，不覆盖源文件；
+  随包 FFmpeg 不含 Opus 与 WAV 解码器，这两种格式只能按原格式增强。
 - macOS 从当前用户 QQ 音乐 plist 读取凭据；Windows 从已登录、运行中的 QQMusic.exe
   读取凭据，权限不足时才提示管理员启动。
 - ekey 和登录令牌仅用于当前进程，不写入日志、磁盘或任务历史。
