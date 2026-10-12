@@ -590,3 +590,7 @@ button.alert:hover { background: var(--gold-bg); filter: brightness(1.15); }
 .tpl-chip { padding: 3px 8px; border: 1px solid var(--rule); border-radius: 999px; background: transparent; color: var(--ink2); font: inherit; font-size: 11px; cursor: pointer; }
 .tpl-chip:hover { color: var(--ink); border-color: var(--rule2); background: var(--raised2); }
 .tpl-preview { margin: 8px 0 0; color: var(--ink2); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.tpl-legend { margin: 8px 0 0; font-size: 11px; line-height: 1.6; color: var(--ink3); }
+.tpl-legend div { display: flex; gap: 8px; }
+.tpl-legend dt { flex: none; min-width: 84px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink2); }
+.tpl-legend dd { margin: 0; }

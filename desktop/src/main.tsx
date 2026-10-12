@@ -167,6 +167,7 @@ export default function App() {
   const [watchPending, setWatchPending] = useState<string[]>([]);
   const [skipExisting, setSkipExisting] = useState(saved.skipExisting ?? true);
   const [outputTemplate, setOutputTemplate] = useState(saved.template || "");
+  const [customTemplate, setCustomTemplate] = useState(() => Boolean(saved.template) && !TEMPLATE_PRESETS.some((p) => p.value === saved.template));
   const processing = useRef(false);
   const polling = useRef(false);
   const templateInput = useRef<HTMLInputElement>(null);
@@ -753,13 +754,21 @@ export default function App() {
             <p className="ch">输出命名</p>
             <select
               aria-label="命名模板预设"
-              value={TEMPLATE_PRESETS.some((p) => p.value === outputTemplate) ? outputTemplate : "custom"}
-              onChange={(event) => setOutputTemplate(event.target.value === "custom" ? "{artist} - {title}" : event.target.value)}
+              value={customTemplate ? "custom" : outputTemplate}
+              onChange={(event) => {
+                if (event.target.value === "custom") {
+                  setCustomTemplate(true);
+                  if (!outputTemplate) setOutputTemplate("{artist} - {title}");
+                } else {
+                  setCustomTemplate(false);
+                  setOutputTemplate(event.target.value);
+                }
+              }}
             >
               {TEMPLATE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
               <option value="custom">自定义…</option>
             </select>
-            {!TEMPLATE_PRESETS.some((p) => p.value === outputTemplate) && (
+            {customTemplate && (
               <>
                 <input
                   ref={templateInput}
@@ -791,6 +800,12 @@ export default function App() {
                   ))}
                   <button className="tpl-chip" title="插入子目录分隔符" onClick={() => setOutputTemplate(outputTemplate + "/")}>/ 子目录</button>
                 </div>
+                <dl className="tpl-legend">
+                  {TEMPLATE_TOKENS.map(({ token, label, sample }) => (
+                    <div key={token}><dt>{token}</dt><dd>{label}，如 {sample}</dd></div>
+                  ))}
+                  <div><dt>/</dt><dd>分隔子目录</dd></div>
+                </dl>
                 {templateError(outputTemplate) ? (
                   <p className="key-error">{templateError(outputTemplate)}</p>
                 ) : (
@@ -798,7 +813,7 @@ export default function App() {
                 )}
               </>
             )}
-            {outputTemplate && TEMPLATE_PRESETS.some((p) => p.value === outputTemplate) && (
+            {outputTemplate && !customTemplate && (
               <p className="tpl-preview">预览：{templatePreview(outputTemplate)}.flac</p>
             )}
             <p className="setting-note">按歌曲信息命名；缺失字段回落为「未知」。启用后生成副本，保留源文件。</p>
