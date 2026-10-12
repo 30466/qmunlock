@@ -341,7 +341,14 @@ impl FolderWatcher {
             ));
         }
         let mut observed = BTreeMap::new();
-        collect(&root, &BTreeSet::new(), &mut observed, &mut Vec::new(), 0, &mut 0)?;
+        collect(
+            &root,
+            &BTreeSet::new(),
+            &mut observed,
+            &mut Vec::new(),
+            0,
+            &mut 0,
+        )?;
         Ok(Self {
             root,
             delivered: observed.clone(),

@@ -163,7 +163,8 @@ pub fn open_external_url(url: String) -> std::result::Result<(), String> {
 /// 用系统文件管理器打开输出目录。传入文件时打开其所在目录；路径必须真实存在。
 #[tauri::command]
 pub fn open_directory(path: String) -> std::result::Result<(), String> {
-    let mut target = std::fs::canonicalize(&path).map_err(|_| "目录不存在，请先处理文件或重新选择输出目录".to_owned())?;
+    let mut target = std::fs::canonicalize(&path)
+        .map_err(|_| "目录不存在，请先处理文件或重新选择输出目录".to_owned())?;
     if target.is_file() {
         target.pop();
     }
