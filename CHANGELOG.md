@@ -4,19 +4,28 @@ All notable changes to QM Unlock are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-- Resolve the nearest existing ancestor for missing output paths so symlink aliases (including macOS `/var`) produce stable history keys before and after directory creation.
-- Dispatch folder scans away from the UI thread; cache history indexes, prune missing outputs, cap history at 10,000 records and save once per batch. Add a history clearing control and document local paths and metadata network requests.
-- Continue monitoring through temporary directory/entry errors and acknowledge files only after successful queue insertion; retry failed scans/acks without losing or duplicating files. Wait for encrypted downloads to have valid footers.
-- Restore credential preflight for encrypted-only batches and bound template filenames by UTF-8 bytes rather than character count.
+## [2.2.0] - 2026-10-12
 
 ### Added
 
 - Watch a QQ Music download directory and automatically queue new or changed files after two stable polls; use a separate output directory and serialize conversion batches.
 - Skip previously converted sources and known generated outputs using local processing history and existing-output checks, with an opt-out for reprocessing.
-- Output naming presets and custom {filename}, {artist}, {title}, {album}, {track} templates with safe subdirectories, metadata fallback and source preservation.
+- Output naming: five presets plus a custom template editor with one-click placeholder buttons, a live example preview, inline validation and a placeholder legend. Placeholders: `{filename}`, `{artist}`, `{albumartist}`, `{title}`, `{album}`, `{year}`, `{disc}`, `{track}`; `/` creates subdirectories, with metadata fallback and source preservation.
+- "打开输出目录" button in the output card (falls back to the folder of the latest output when no output directory is set).
 - Persist automation preferences without storing ekeys or login credentials.
+
+### Changed
+
+- Remove the top-bar "设置" button; the settings sidebar is shown whenever the queue is non-empty or a folder is being watched.
+- Folder watching only scans 2 levels / 2000 entries, skips hidden and system directories, and refuses a drive root or the home directory. Oversized folders now fail fast with "目录过大" and stop watching instead of freezing the app.
+
+### Fixed
+
+- The "自定义" naming option snapped back to a preset and never showed its input.
+- Resolve the nearest existing ancestor for missing output paths so symlink aliases (including macOS `/var`) produce stable history keys before and after directory creation.
+- Dispatch folder scans away from the UI thread; cache history indexes, prune missing outputs, cap history at 10,000 records and save once per batch. Add a history clearing control and document local paths and metadata network requests.
+- Continue monitoring through temporary directory/entry errors and acknowledge files only after successful queue insertion; retry failed scans/acks without losing or duplicating files. Wait for encrypted downloads to have valid footers.
+- Restore credential preflight for encrypted-only batches and bound template filenames by UTF-8 bytes rather than character count.
 
 ## [2.1.0] - 2026-10-10
 
