@@ -119,6 +119,44 @@ function initialTheme(): Theme {
   return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
+const TEMPLATE_PRESETS: { value: string; label: string }[] = [
+  { value: "", label: "保留源文件名" },
+  { value: "{artist} - {title}", label: "歌手 - 歌名" },
+  { value: "{title} - {artist}", label: "歌名 - 歌手" },
+  { value: "{artist}/{album}/{track} {title}", label: "歌手 / 专辑 / 序号 歌名" },
+  { value: "{album}/{track} {title}", label: "专辑 / 序号 歌名" },
+  { value: "{albumartist}/{year} - {album}/{track} {title}", label: "专辑艺人 / 年份 - 专辑 / 序号 歌名" },
+];
+const TEMPLATE_TOKENS: { token: string; label: string; sample: string }[] = [
+  { token: "{artist}", label: "歌手", sample: "周杰伦" },
+  { token: "{title}", label: "歌名", sample: "晴天" },
+  { token: "{album}", label: "专辑", sample: "叶惠美" },
+  { token: "{albumartist}", label: "专辑艺人", sample: "周杰伦" },
+  { token: "{year}", label: "年份", sample: "2003" },
+  { token: "{disc}", label: "碟号", sample: "1" },
+  { token: "{track}", label: "序号", sample: "03" },
+  { token: "{filename}", label: "原文件名", sample: "晴天_Q128" },
+];
+
+/** 与后端 naming::validate 保持一致，返回错误文案；合法返回 undefined。 */
+function templateError(template: string): string | undefined {
+  if (!template.trim()) return "请输入命名模板";
+  if (template.startsWith("/") || /[\\:]/.test(template)) return "须为相对路径，子目录用 / 分隔";
+  if (template.split("/").some((part) => !part.trim() || part.trim() === "." || part.trim() === "..")) {
+    return "不能包含空目录、. 或 ..";
+  }
+  const names = template.match(/\{[^{}]*\}/g) ?? [];
+  if (names.some((name) => !TEMPLATE_TOKENS.some((t) => t.token === name))) return "含有不支持的占位符";
+  if (template.replace(/\{[^{}]*\}/g, "").match(/[{}]/)) return "大括号不匹配";
+  return undefined;
+}
+
+function templatePreview(template: string): string {
+  let out = template;
+  for (const { token, sample } of TEMPLATE_TOKENS) out = out.split(token).join(sample);
+  return out;
+}
+
 export default function App() {
   const [paths, setPaths] = useState<string[]>([]);
   const [fileInfo, setFileInfo] = useState<Record<string, FileInfo>>({});
@@ -129,9 +167,9 @@ export default function App() {
   const [watchPending, setWatchPending] = useState<string[]>([]);
   const [skipExisting, setSkipExisting] = useState(saved.skipExisting ?? true);
   const [outputTemplate, setOutputTemplate] = useState(saved.template || "");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const processing = useRef(false);
   const polling = useRef(false);
+  const templateInput = useRef<HTMLInputElement>(null);
   const acceptedWatchVersions = useRef(new Map<string, string>());
   const [automationBusy, setAutomationBusy] = useState(false);
   const watchOutput = useRef(outputDir);
@@ -318,7 +356,6 @@ export default function App() {
   const toggleWatch = async () => {
     if (processing.current || automationBusy) return;
     setAutomationBusy(true);
-    setSettingsOpen(true);
     try {
       if (watching) {
         await invoke("set_watch_directory", { directory: null });
@@ -362,7 +399,15 @@ export default function App() {
           const accepted = files.filter(file => acceptedWatchVersions.current.get(file.path) === file.version);
           if (!cancelled && accepted.length) await invoke("acknowledge_watch_files", { files: accepted });
         } catch (error) {
-          if (!cancelled) { setNotice("监听暂时失败，将继续重试：" + String(error)); setNoticeBad(true); }
+          if (cancelled) return;
+          if (String(error).includes("目录过大")) {
+            // 目录不可能自行变小，继续重试只会反复扫描；直接停止监听
+            await invoke("set_watch_directory", { directory: null }).catch(() => {});
+            setWatching(false); setWatchPending([]);
+            setNotice("已停止监听：" + String(error)); setNoticeBad(true);
+          } else {
+            setNotice("监听暂时失败，将继续重试：" + String(error)); setNoticeBad(true);
+          }
         } finally { polling.current = false; }
       })();
     }, 2000);
@@ -436,6 +481,10 @@ export default function App() {
 
   const runBatch = async (batch: string[], automatic = false) => {
     if (!batch.length || processing.current) return;
+    const templateProblem = outputTemplate.trim() ? templateError(outputTemplate) : undefined;
+    if (templateProblem) {
+      setNotice(`命名模板无效：${templateProblem}`); setNoticeBad(true); return;
+    }
     const batchHasEnc = batch.some(path => fileInfo[path]?.kind === "enc");
     const batchHasPlain = batch.some(path => fileInfo[path]?.kind === "plain");
     if (batchHasEnc && !batchHasPlain) {
@@ -519,7 +568,7 @@ export default function App() {
 
   const keyReady = hasPlain || (keyMode === "manual" ? Boolean(manualKey.trim()) : Boolean(credentials?.available));
   const canStart = visiblePaths.length > 0 && keyReady && !running;
-  const state = dragActive ? "drag" : paths.length || settingsOpen ? "loaded" : "empty";
+  const state = dragActive ? "drag" : paths.length || watching ? "loaded" : "empty";
   const permissionRequired = credentials?.state === "permission_required";
   const failedJob = jobs.find((row) => !row.result.ok && fileInfo[row.result.input]?.kind !== "plain")?.result;
   const jobByPath = useMemo(() => {
@@ -540,7 +589,6 @@ export default function App() {
           // 顶栏是拖拽区；按钮区域阻止 mousedown 冒泡，避免点按钮时误触发窗口拖动
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <button className="ghost" onClick={() => setSettingsOpen(v => !v)}>设置</button>
           <button
             className="ico-btn"
             title="切换深浅色"
@@ -693,11 +741,57 @@ export default function App() {
           </div>
           <div className="card automation">
             <p className="ch">输出命名</p>
-            <select aria-label="命名模板预设" value={["", "{artist} - {title}", "{album}/{track} {title}"].includes(outputTemplate) ? outputTemplate : "custom"} onChange={event => setOutputTemplate(event.target.value === "custom" ? "{filename}" : event.target.value)}>
-              <option value="">保留源文件名</option><option value="{artist} - {title}">歌手 - 歌名</option><option value="{album}/{track} {title}">专辑 / 序号 歌名</option><option value="custom">自定义</option>
+            <select
+              aria-label="命名模板预设"
+              value={TEMPLATE_PRESETS.some((p) => p.value === outputTemplate) ? outputTemplate : "custom"}
+              onChange={(event) => setOutputTemplate(event.target.value === "custom" ? "{artist} - {title}" : event.target.value)}
+            >
+              {TEMPLATE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              <option value="custom">自定义…</option>
             </select>
-            <input aria-label="自定义命名模板" value={outputTemplate} onChange={event => setOutputTemplate(event.target.value)} placeholder="{artist} - {title}" spellCheck={false} />
-            <p className="setting-note">支持 {"{filename} {artist} {title} {album} {track}"}，/ 创建子目录。命名和监听均保留源文件，生成副本。</p>
+            {!TEMPLATE_PRESETS.some((p) => p.value === outputTemplate) && (
+              <>
+                <input
+                  ref={templateInput}
+                  aria-label="自定义命名模板"
+                  value={outputTemplate}
+                  onChange={(event) => setOutputTemplate(event.target.value)}
+                  placeholder="{artist} - {title}"
+                  spellCheck={false}
+                />
+                <div className="tpl-chips">
+                  {TEMPLATE_TOKENS.map(({ token, label }) => (
+                    <button
+                      key={token}
+                      className="tpl-chip"
+                      title={`插入 ${token}`}
+                      onClick={() => {
+                        const el = templateInput.current;
+                        const at = el?.selectionStart ?? outputTemplate.length;
+                        const end = el?.selectionEnd ?? at;
+                        setOutputTemplate(outputTemplate.slice(0, at) + token + outputTemplate.slice(end));
+                        window.requestAnimationFrame(() => {
+                          el?.focus();
+                          el?.setSelectionRange(at + token.length, at + token.length);
+                        });
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button className="tpl-chip" title="插入子目录分隔符" onClick={() => setOutputTemplate(outputTemplate + "/")}>/ 子目录</button>
+                </div>
+                {templateError(outputTemplate) ? (
+                  <p className="key-error">{templateError(outputTemplate)}</p>
+                ) : (
+                  <p className="tpl-preview" title="用示例歌曲生成的预览">预览：{templatePreview(outputTemplate)}.flac</p>
+                )}
+              </>
+            )}
+            {outputTemplate && TEMPLATE_PRESETS.some((p) => p.value === outputTemplate) && (
+              <p className="tpl-preview">预览：{templatePreview(outputTemplate)}.flac</p>
+            )}
+            <p className="setting-note">按歌曲信息命名；缺失字段回落为「未知」。启用后生成副本，保留源文件。</p>
           </div>
           {/* 只在有加密文件（或队列为空、还不知道）时需要 ekey */}
           {(hasEnc || !hasPlain) && (

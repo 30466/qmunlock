@@ -239,13 +239,37 @@ impl History {
     }
 }
 
+/// 监听扫描的上限：下载目录通常很浅、文件很少，误选家目录或磁盘根目录时必须尽快失败，
+/// 否则每 2 秒一次的全量遍历会拖垮应用。
+const MAX_DEPTH: usize = 2;
+const MAX_ENTRIES: usize = 2_000;
+
+const TOO_LARGE: &str = "目录过大（子目录超过 2 层或条目超过 2000），请选择具体的下载文件夹";
+
+/// 不会放下载音乐、却可能极其庞大的目录名。
+fn skipped_directory(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "node_modules" | "Library" | "Applications" | "AppData" | "Windows" | "Program Files"
+        )
+        || name.ends_with(".app")
+        || name.ends_with(".photoslibrary")
+}
+
 fn collect(
     root: &Path,
     excluded: &BTreeSet<PathBuf>,
     found: &mut BTreeMap<PathBuf, Stamp>,
     unreadable: &mut Vec<PathBuf>,
+    depth: usize,
+    visited: &mut usize,
 ) -> std::io::Result<()> {
     for entry in std::fs::read_dir(root)? {
+        *visited += 1;
+        if *visited > MAX_ENTRIES {
+            return Err(std::io::Error::other(TOO_LARGE));
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(_) => {
@@ -265,8 +289,17 @@ fn collect(
             continue;
         }
         if kind.is_dir() {
-            if collect(&path, excluded, found, unreadable).is_err() {
-                unreadable.push(path);
+            if skipped_directory(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            if depth >= MAX_DEPTH {
+                return Err(std::io::Error::other(TOO_LARGE));
+            }
+            match collect(&path, excluded, found, unreadable, depth + 1, visited) {
+                Ok(()) => {}
+                // 超限必须向上传播；只有「读不了」才记为暂时不可读
+                Err(error) if error.to_string() == TOO_LARGE => return Err(error),
+                Err(_) => unreadable.push(path),
             }
         } else if super::supported_path(&path) {
             if let Some(s) = stamp(&path) {
@@ -299,8 +332,16 @@ impl FolderWatcher {
     }
     pub fn new(root: &Path) -> std::io::Result<Self> {
         let root = std::fs::canonicalize(root)?;
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .and_then(|h| std::fs::canonicalize(h).ok());
+        if root.parent().is_none() || home.as_deref() == Some(root.as_path()) {
+            return Err(std::io::Error::other(
+                "不能监听磁盘根目录或用户主目录，请选择具体的下载文件夹",
+            ));
+        }
         let mut observed = BTreeMap::new();
-        collect(&root, &BTreeSet::new(), &mut observed, &mut Vec::new())?;
+        collect(&root, &BTreeSet::new(), &mut observed, &mut Vec::new(), 0, &mut 0)?;
         Ok(Self {
             root,
             delivered: observed.clone(),
@@ -323,7 +364,7 @@ impl FolderWatcher {
         let mut now = BTreeMap::new();
         let mut unreadable = Vec::new();
         let excluded = excluded.iter().cloned().collect();
-        collect(&self.root, &excluded, &mut now, &mut unreadable)?;
+        collect(&self.root, &excluded, &mut now, &mut unreadable, 0, &mut 0)?;
         let scanned: BTreeSet<_> = now.keys().cloned().collect();
         // Keep versions under temporarily inaccessible subdirectories, so recovery
         // does not turn already delivered files into new downloads.
@@ -411,6 +452,19 @@ mod tests {
         let p = std::env::temp_dir().join(format!("qm-automation-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+    #[test]
+    fn oversized_or_too_deep_tree_is_rejected_quickly() {
+        let dir = directory("deep");
+        let mut deep = dir.clone();
+        for level in 0..=MAX_DEPTH {
+            deep = deep.join(format!("d{level}"));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(FolderWatcher::new(&dir).is_err());
+        let shallow = directory("shallow");
+        std::fs::create_dir_all(shallow.join(".hidden/a/b/c/d/e/f")).unwrap();
+        assert!(FolderWatcher::new(&shallow).is_ok());
     }
     #[test]
     fn watcher_waits_for_stable_versions_and_ignores_outputs() {

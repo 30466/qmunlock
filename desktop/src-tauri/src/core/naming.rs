@@ -22,10 +22,10 @@ pub fn validate(template: &str) -> Result<()> {
         let end = rest[start..].find('}').ok_or("命名模板括号不匹配")? + start;
         if !matches!(
             &rest[start + 1..end],
-            "filename" | "artist" | "title" | "album" | "track"
+            "filename" | "artist" | "albumartist" | "title" | "album" | "track" | "disc" | "year"
         ) {
             return Err(Error::from(
-                "支持的占位符：{filename}、{artist}、{title}、{album}、{track}",
+                "支持的占位符：{filename}、{artist}、{albumartist}、{title}、{album}、{track}、{disc}、{year}",
             ));
         }
         rest = &rest[end + 1..];
@@ -104,12 +104,24 @@ pub fn relative(
         .filter(|s| !s.is_empty())
         .or_else(|| embedded.map(|m| m.album.as_str()).filter(|s| !s.is_empty()))
         .unwrap_or("未知专辑");
+    let albumartist = meta
+        .map(|m| m.album_singers.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(artist);
+    let year: String = meta
+        .map(|m| m.release_date.chars().take(4).collect::<String>())
+        .filter(|s| s.len() == 4 && s.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or_else(|| "未知年份".into());
+    let disc = meta.and_then(|m| m.disc_number).map_or(1, |d| d + 1);
     let track = format!("{:02}", meta.and_then(|m| m.track_number).unwrap_or(0));
     let replacements = [
         ("{filename}", safe(filename)),
         ("{title}", safe(title)),
         ("{artist}", safe(artist)),
         ("{album}", safe(album)),
+        ("{albumartist}", safe(albumartist)),
+        ("{year}", year),
+        ("{disc}", disc.to_string()),
         ("{track}", track),
     ];
     let mut path = PathBuf::new();

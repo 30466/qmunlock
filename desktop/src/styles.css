@@ -586,3 +586,7 @@ button.alert:hover { background: var(--gold-bg); filter: brightness(1.15); }
 .shell[data-state="loaded"] .drop .halo { flex-shrink: 0; width: 96px; height: 96px; margin-bottom: 18px; }
 .shell[data-state="loaded"] .drop .halo img { width: 72px; height: 72px; }
 .drop .acts { flex-wrap: wrap; justify-content: center; }
+.tpl-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.tpl-chip { padding: 3px 8px; border: 1px solid var(--rule); border-radius: 999px; background: transparent; color: var(--ink2); font: inherit; font-size: 11px; cursor: pointer; }
+.tpl-chip:hover { color: var(--ink); border-color: var(--rule2); background: var(--raised2); }
+.tpl-preview { margin: 8px 0 0; color: var(--ink2); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
