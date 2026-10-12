@@ -6,7 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import appIcon from "../src-tauri/icons/icon.svg";
-import { Check, ChevronRight, Github, LoaderCircle, Moon, Plus, RefreshCw, Sun, X } from "lucide-react";
+import { Check, ChevronRight, FolderOpen, Github, LoaderCircle, Moon, Plus, RefreshCw, Sun, X } from "lucide-react";
 import "./styles.css";
 
 window.addEventListener("error", (event) => {
@@ -422,6 +422,16 @@ export default function App() {
       setNotice("已清除处理记录，音乐文件保留；下次将重新识别已有输出"); setNoticeBad(false);
     } catch (error) { setNotice("清除记录失败：" + String(error)); setNoticeBad(true); }
     finally { setAutomationBusy(false); }
+  };
+
+  // 未指定输出目录时，产物在源文件旁边：取最近一次成功产物所在目录
+  const openOutput = async () => {
+    const target = outputDir || jobs.find((row) => row.result.ok && row.result.output)?.result.output;
+    if (!target) {
+      setNotice("还没有输出文件，处理完成后可打开"); setNoticeBad(true); return;
+    }
+    try { await invoke("open_directory", { path: target }); }
+    catch (error) { setNotice(String(error)); setNoticeBad(true); }
   };
 
   const chooseLyricsDir = async () => {
@@ -874,6 +884,9 @@ export default function App() {
                 <ChevronRight size={13} />
               </button>
             )}
+            <button className="ghost watch-toggle" onClick={() => void openOutput()}>
+              <FolderOpen size={13} style={{ marginRight: 6, verticalAlign: "-2px" }} />打开输出目录
+            </button>
             {fetchLyrics && (
               <button className="path lrc" onClick={() => void chooseLyricsDir()} title={lyricsDir || "与音频同目录"}>
                 <span className="chip">lrc</span>

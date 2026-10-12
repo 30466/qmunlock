@@ -160,6 +160,35 @@ pub fn open_external_url(url: String) -> std::result::Result<(), String> {
         .map_err(|error| format!("无法打开浏览器：{error}"))
 }
 
+/// 用系统文件管理器打开输出目录。传入文件时打开其所在目录；路径必须真实存在。
+#[tauri::command]
+pub fn open_directory(path: String) -> std::result::Result<(), String> {
+    let mut target = std::fs::canonicalize(&path).map_err(|_| "目录不存在，请先处理文件或重新选择输出目录".to_owned())?;
+    if target.is_file() {
+        target.pop();
+    }
+    if !target.is_dir() {
+        return Err("目录不存在，请先处理文件或重新选择输出目录".to_owned());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("explorer");
+    #[cfg(target_os = "linux")]
+    let mut command = std::process::Command::new("xdg-open");
+
+    // Windows 的 \\?\ 前缀 explorer 不认，去掉再传
+    #[cfg(target_os = "windows")]
+    let target = PathBuf::from(target.to_string_lossy().trim_start_matches(r"\\?\"));
+
+    command
+        .arg(&target)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开目录：{error}"))
+}
+
 /// 运行平台标识（`macos` / `windows` / `linux`），供前端门控平台专属功能。
 ///
 /// 前端不能靠 UA 或凭据接口推断平台：凭据读取失败时 platform 会是 unknown，
