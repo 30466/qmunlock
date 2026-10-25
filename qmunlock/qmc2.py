@@ -250,7 +250,7 @@ class RC4:
 # 对外主函数
 # ────────────────────────────────────────────────────────────────
 def detect_fmt(b):
-    if b[:3] == b'ID3':
+    if len(b) >= 10 and b[:3] == b'ID3' and b[3] in (2, 3, 4) and all(v < 128 for v in b[6:10]):
         return 'mp3'
     if b[:4] == b'fLaC':
         return 'flac'
@@ -258,7 +258,9 @@ def detect_fmt(b):
         return 'ogg'
     if b[4:8] == b'ftyp':
         return 'm4a'
-    if b[0] == 0xFF and b[1] in (0xF2, 0xF3, 0xFB):
+    if (len(b) >= 4 and b[0] == 0xFF and b[1] & 0xE0 == 0xE0
+            and b[1] & 0x18 != 0x08 and b[1] & 0x06 != 0
+            and b[2] >> 4 not in (0, 15) and b[2] & 0x0C != 0x0C):
         return 'mp3'
     return 'bin'
 

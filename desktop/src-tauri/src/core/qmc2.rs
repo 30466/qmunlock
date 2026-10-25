@@ -58,11 +58,26 @@ pub fn detect_format(data: &[u8]) -> &'static str {
         "flac"
     } else if data.len() >= 8 && &data[4..8] == b"ftyp" {
         "m4a"
-    } else if data.starts_with(b"ID3") || data.first() == Some(&0xff) {
+    } else if is_mp3_header(data) {
         "mp3"
     } else {
         "bin"
     }
+}
+
+fn is_mp3_header(data: &[u8]) -> bool {
+    let id3 = data.len() >= 10
+        && data.starts_with(b"ID3")
+        && (2..=4).contains(&data[3])
+        && data[6..10].iter().all(|value| *value < 128);
+    let frame = data.len() >= 4
+        && data[0] == 0xff
+        && data[1] & 0xe0 == 0xe0
+        && data[1] & 0x18 != 0x08
+        && data[1] & 0x06 != 0
+        && ![0, 15].contains(&(data[2] >> 4))
+        && data[2] & 0x0c != 0x0c;
+    id3 || frame
 }
 
 fn map_decrypt(data: &mut [u8], key: &[u8], offset: u64) {
@@ -307,6 +322,20 @@ mod tests {
         assert_eq!(detect_format(b"OggS"), "ogg");
         assert_eq!(detect_format(b"fLaC"), "flac");
         assert_eq!(detect_format(b"\0\0\0\x18ftypmp42"), "m4a");
+    }
+
+    #[test]
+    fn random_ff_prefix_is_not_reported_as_a_successful_mp3() {
+        for bytes in [
+            &b"\xffgarbage"[..],
+            &b"\xff\xfb\xff\x00"[..],
+            &b"ID3bad"[..],
+            &b""[..],
+        ] {
+            assert_eq!(detect_format(bytes), "bin");
+        }
+        assert_eq!(detect_format(&[0xff, 0xfb, 0x90, 0x00]), "mp3");
+        assert_eq!(detect_format(b"ID3\x04\x00\x00\x00\x00\x00\x00"), "mp3");
     }
 
     #[test]

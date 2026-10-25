@@ -93,46 +93,73 @@ mod macos {
     use std::path::Path;
     use std::process::Command;
 
-    fn login_info_path() -> Result<std::path::PathBuf> {
-        Ok(dirs::home_dir()
-            .ok_or("找不到用户目录")?
-            .join("Library/Containers/com.tencent.QQMusicMac/Data/Library/Preferences/com.tencent.QQMusicMac.plist"))
+    fn login_info_paths(home: &Path) -> [std::path::PathBuf; 2] {
+        [
+            home.join("Library/Containers/com.tencent.QQMusicMac/Data/Library/Preferences/com.tencent.QQMusicMac.plist"),
+            home.join("Library/Preferences/com.tencent.QQMusicMac.plist"),
+        ]
+    }
+
+    struct LoginFailure {
+        state: &'static str,
+        message: String,
+    }
+
+    /// A missing or unusable archive must not hide a usable login in the
+    /// other QQ Music distribution's preferences directory.
+    fn load_from_paths(
+        paths: &[std::path::PathBuf],
+    ) -> std::result::Result<Credentials, LoginFailure> {
+        let mut failure = LoginFailure {
+            state: "qqmusic_not_found",
+            message: "未找到 QQ 音乐的登录文件（已检查容器及用户资源库）。请安装并登录 QQ 音乐后重新检测。".into(),
+        };
+        for path in paths {
+            match File::open(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    failure = LoginFailure {
+                        state: "permission_required",
+                        message: "无法读取 QQ 音乐登录文件。请在系统设置中允许 QM Unlock 的完全磁盘访问权限，再重新检测。".into(),
+                    };
+                }
+                Err(error) => {
+                    failure = LoginFailure {
+                        state: "read_failed",
+                        message: format!("无法访问 QQ 音乐登录文件：{error}"),
+                    };
+                }
+                Ok(_) => match load_from_file(path) {
+                    Ok(credentials) => return Ok(credentials),
+                    Err(error) => {
+                        failure = LoginFailure {
+                            state: "login_unavailable",
+                            message: error.to_string(),
+                        };
+                    }
+                },
+            }
+        }
+        Err(failure)
+    }
+
+    fn find_login() -> std::result::Result<Credentials, LoginFailure> {
+        let home = dirs::home_dir().ok_or_else(|| LoginFailure {
+            state: "path_unavailable",
+            message: "找不到用户目录".into(),
+        })?;
+        load_from_paths(&login_info_paths(&home))
     }
 
     pub fn status() -> CredentialStatus {
-        let path = match login_info_path() {
-            Ok(path) => path,
-            Err(error) => return unavailable_status("path_unavailable", error.to_string()),
-        };
-        match File::open(&path) {
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                unavailable_status(
-                    "permission_required",
-                    "未获「完全磁盘访问权限」，无法读取 QQ 音乐最新登录信息。请在系统设置中手动添加 QM Unlock 并打开开关（更新版本后旧授权会失效，需先用 − 删除旧条目再重新添加），然后返回本应用重新检测。",
-                )
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => unavailable_status(
-                "qqmusic_not_found",
-                "未找到 QQ 音乐的登录文件。请安装并登录 QQ 音乐后重新检测。",
-            ),
-            Err(error) => unavailable_status(
-                "read_failed",
-                format!("无法访问 QQ 音乐登录文件：{error}"),
-            ),
-            Ok(_) => match load_from_file(&path) {
-                Ok(credentials) => ready_status(credentials),
-                Err(error) => unavailable_status("login_unavailable", error.to_string()),
-            },
+        match find_login() {
+            Ok(credentials) => ready_status(credentials),
+            Err(failure) => unavailable_status(failure.state, failure.message),
         }
     }
 
     pub fn load() -> Result<Credentials> {
-        let path = login_info_path()?;
-        load_from_file(&path).map_err(|error| {
-            Error::from(format!(
-                "无法读取 QQ 音乐最新登录信息：{error}。请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」中允许 QM Unlock。"
-            ))
-        })
+        find_login().map_err(|failure| Error::from(failure.message))
     }
 
     pub fn open_full_disk_access_settings() -> Result<()> {
@@ -236,6 +263,49 @@ mod macos {
             assert_eq!(credentials.uin, "12345");
             assert_eq!(credentials.authst, "test-auth");
             assert_eq!(credentials.login_type, "3");
+        }
+
+        fn write_login(path: &Path, authst: Option<&str>) {
+            let mut outer = plist::Dictionary::new();
+            if let Some(authst) = authst {
+                let mut login = plist::Dictionary::new();
+                login.insert("strAuthst".into(), Value::String(authst.into()));
+                login.insert("nUserId".into(), Value::Integer(12345.into()));
+                let mut archive = plist::Dictionary::new();
+                archive.insert(
+                    "$objects".into(),
+                    Value::Array(vec![Value::Dictionary(login)]),
+                );
+                let mut data = Vec::new();
+                Value::Dictionary(archive)
+                    .to_writer_binary(&mut data)
+                    .unwrap();
+                outer.insert("AutoLoginUserInfo".into(), Value::Data(data));
+            }
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            Value::Dictionary(outer).to_file_binary(path).unwrap();
+        }
+
+        #[test]
+        fn falls_back_to_user_preferences_when_container_login_is_unusable() {
+            let home = std::env::temp_dir().join(format!("qmunlock-login-{}", std::process::id()));
+            let paths = login_info_paths(&home);
+            write_login(&paths[1], Some("test-auth"));
+            assert!(load_from_paths(&paths).is_ok());
+            write_login(&paths[0], None);
+            assert!(load_from_paths(&paths).is_ok());
+            write_login(&paths[0], Some(""));
+            assert!(load_from_paths(&paths).is_ok());
+            std::fs::remove_dir_all(home).unwrap();
+        }
+
+        #[test]
+        fn missing_logins_are_not_reported_as_permission_errors() {
+            let paths = [std::path::PathBuf::from(
+                "/nonexistent/qmunlock-login.plist",
+            )];
+            let failure = load_from_paths(&paths).err().unwrap();
+            assert_eq!(failure.state, "qqmusic_not_found");
         }
 
         #[test]

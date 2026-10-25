@@ -54,3 +54,6 @@ tests/fixtures/mgg_head_*.bin
 # 第三方样例 DMG（只用来派生 .DS_Store 布局模板，体积大且非本项目产物）
 # 派生结果已固化为 desktop/scripts/dmg-template.DS_Store，构建不再需要这个样例
 样例.dmg
+
+# Downloaded lyrics are user media, never source files.
+*.lrc

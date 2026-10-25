@@ -66,8 +66,8 @@ def fetch_ekey(mid, filename, uin, authst, login_type="3", platform="20"):
         return midinfo[0]
     # 诊断：retcode 405 / 空 ekey 多为 authst 过期或无权限
     raise EKeyError(
-        f"API 未返回 ekey (retcode={data.get('retcode')} msg={data.get('msg')!r}): "
-        + json.dumps(req1, ensure_ascii=False)[:300]
+        f"QQ 音乐未返回 ekey（请求状态 {req1.get('code')}，曲目状态 {data.get('retcode')}），"
+        "请检查登录状态及资源权限"
     )
 
 

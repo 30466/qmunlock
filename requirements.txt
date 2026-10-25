@@ -3,3 +3,5 @@
 #   brew install ffmpeg
 # 可选（测试）：
 pytest>=7
+# Embedded album art metadata; no audio re-encoding.
+mutagen>=1.47,<2
